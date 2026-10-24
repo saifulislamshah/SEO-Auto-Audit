@@ -1,0 +1,13 @@
+{
+  "name": "seo-auto-audit",
+  "version": "1.0.0",
+  "description": "Turn Screaming Frog, Semrush and PageSpeed exports into a finished Excel SEO audit with ready-to-paste fixes. Beginner and Expert report levels.",
+  "author": {
+    "name": "Saiful Islam Shah",
+    "url": "https://github.com/saifulislamshah"
+  },
+  "homepage": "https://github.com/saifulislamshah/SEO-Auto-Audit",
+  "repository": "https://github.com/saifulislamshah/SEO-Auto-Audit",
+  "license": "MIT",
+  "keywords": ["seo", "seo-audit", "screaming-frog", "semrush", "pagespeed", "excel", "wordpress"]
+}

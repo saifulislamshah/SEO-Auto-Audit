@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.seo-audit-work/
+*_backup_*.xlsx
+~$*.xlsx
+.DS_Store
+Thumbs.db

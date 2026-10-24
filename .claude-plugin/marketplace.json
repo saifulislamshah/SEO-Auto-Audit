@@ -1,0 +1,18 @@
+{
+  "name": "seo-auto-audit",
+  "owner": {
+    "name": "Saiful Islam Shah",
+    "url": "https://github.com/saifulislamshah"
+  },
+  "plugins": [
+    {
+      "name": "seo-auto-audit",
+      "source": "./",
+      "description": "Turn Screaming Frog, Semrush and PageSpeed exports into a finished Excel SEO audit with ready-to-paste fixes. Beginner and Expert report levels.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Saiful Islam Shah"
+      }
+    }
+  ]
+}
