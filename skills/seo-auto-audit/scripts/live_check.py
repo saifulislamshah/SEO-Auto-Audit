@@ -268,7 +268,8 @@ def parse_page(url, html):
     links = [{"href": urljoin(url, a["href"].strip()), "text": re.sub(r"\s+", " ", a.get_text(" ", strip=True)), "aria": a.get("aria-label") or "",
               "rel": " ".join(a.get("rel") or []), "target": a.get("target") or "", "img": bool(a.find("img"))} for a in soup.find_all("a", href=True)]
     jl = jsonld_types(soup)
-    http_res = sorted(set(re.findall(r"""(?:src|href)=["'](http://[^"']+)""", html)))
+    http_res = sorted(u for u in set(re.findall(r"""(?:src|href)=["'](http://[^"']+)""", html))
+                      if not re.match(r"http://(gmpg\.org|www\.w3\.org|schema\.org|ogp\.me)/", u))  # profile/namespace URIs, not loaded resources
     for t in soup(["script", "style", "noscript"]): t.decompose()
     text = soup.get_text(" ", strip=True)
     words = len(re.findall(r"[A-Za-z0-9'’-]+", text))

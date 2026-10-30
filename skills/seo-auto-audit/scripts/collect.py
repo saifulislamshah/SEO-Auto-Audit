@@ -35,7 +35,8 @@ base = a.url
 if not base and sf is not None:
     ov = sf.crawl_overview(); base = ov.get("Site Crawled") or (sf.html["Address"].iloc[0] if len(sf.html) else None)
 if not base and sem is not None and sem.mega is not None:
-    base = sem.mega["Domain"].mode().iloc[0]
+    col = "Domain" if "Domain" in sem.mega.columns else "url"
+    base = re.match(r"https?://[^/]+", str(sem.mega[col].mode().iloc[0])).group(0)
 if not base:
     base = "https://" + inv["folder_name"].strip("/")
 base = base.rstrip("/")
@@ -78,8 +79,33 @@ pages = [dict(p, url=canon(p["url"])) for p in pages]
 PURLS = {p["url"] for p in pages}
 log(f"HTML 200 pages: {len(pages)} ({mode})")
 
-# ---------- page digest (text for writing fixes) ----------
+# ---------- gap fill: sitemap pages Screaming Frog did not crawl (throttled / stopped early) ----------
 digest = load_json(os.path.join(WD, "page_digest.json"), {}) or {}
+gap_pages = []
+if mode == "screaming_frog" and not a.no_live and not a.no_fetch and not site.get("home_blocked"):
+    gap = [canon(u) for u in site.get("sitemap", {}).get("urls", [])]
+    gap = [u for u in dict.fromkeys(gap) if u not in PURLS and not re.search(r"\.(jpe?g|png|webp|gif|svg|pdf|xml)$", u, re.I)][:a.max_pages]
+    if gap:
+        log(f"{len(gap)} sitemap URLs missing from the Screaming Frog crawl -> fetching them live (polite) ...")
+        from bs4 import BeautifulSoup
+        for u in gap:
+            r = F.get(u)
+            if r is None or r.status_code != 200 or "text/html" not in r.headers.get("Content-Type", "") or LC.CHALLENGE.search(r.text[:4000] or ""):
+                continue
+            fu = canon(r.url)
+            if fu in PURLS: continue
+            p = LC.parse_page(fu, r.text); p.update(status=200, source="Live crawl",
+                indexability="Non-Indexable" if "noindex" in (p["robots"] or "").lower() else "Indexable")
+            s = BeautifulSoup(r.text, "lxml")
+            for t in s(["script", "style", "noscript", "header", "footer", "nav"]): t.decompose()
+            digest[fu] = {"title": p["title"], "h": p["headings"][:40], "text": s.get_text(" ", strip=True)[:3000],
+                          "images": p["images"], "links": p["links"], "jsonld": p["jsonld"]}
+            gap_pages.append(p); PURLS.add(fu)
+        pages += gap_pages
+        save_json(digest, os.path.join(WD, "page_digest.json"))
+        log(f"added {len(gap_pages)} pages from live fetch; total HTML pages: {len(pages)}")
+
+# ---------- page digest (text for writing fixes) ----------
 if mode == "live":
     for p in pages:
         digest[p["url"]] = {"title": p["title"], "h": p["headings"][:40], "text": "", "images": p["images"], "links": p["links"], "jsonld": p["jsonld"]}
@@ -191,10 +217,11 @@ if sem is not None:
         ISS[key]["counts"]["Semrush"] = ISS[key]["counts"].get("Semrush", 0) + f_["failed"]
         ISS[key]["name_counts"][f"Semrush|{name}"] = f_["failed"]
 
-# live-mode issue detection (no Screaming Frog)
-if mode == "live":
+# live-mode issue detection (no Screaming Frog, or pages added by the gap fill)
+live_pages = pages if mode == "live" else gap_pages
+if live_pages:
     by_title = collections.defaultdict(list); by_desc = collections.defaultdict(list)
-    for p in pages:
+    for p in live_pages:
         u = p["url"]; t = p["title"] or ""; d = p["desc"] or ""
         if not t: add_issue("title_missing", u, "Live crawl")
         elif len(t) > 60: add_issue("title_long", u, "Live crawl")
@@ -215,6 +242,11 @@ if mode == "live":
         if "noindex" in (p["robots"] or "").lower(): add_issue("noindex", u, "Live crawl")
         if any(l["target"] == "_blank" and "noopener" not in l["rel"] and host_of(l["href"]) != host_of(base) for l in p["links"]): add_issue("unsafe_links", u, "Live crawl")
         if any((l["text"] or "").strip().lower() in ("read more", "click here", "here", "learn more", "more") for l in p["links"]): add_issue("anchor_text", u, "Live crawl")
+    if mode != "live":  # duplicates against the Screaming Frog pages too
+        for p in pages:
+            if p not in live_pages:
+                if p.get("title"): by_title[p["title"]].append(p["url"])
+                if p.get("desc"): by_desc[p["desc"]].append(p["url"])
     for t, us in by_title.items():
         if len(us) > 1:
             for u in us: add_issue("title_duplicate", u, "Live crawl")
@@ -240,8 +272,30 @@ if site and not site.get("home_blocked"):
 
 # ---------- links ----------
 links = {"internal": [], "external": [], "blocked_external": []}
+recheck_note = None
 if sf is not None:
     links = sf.link_issues()
+    # Screaming Frog "no response" often means the server throttled the crawler: re-check those URLs live
+    nr = sorted({l["target"] for l in links["internal"] if not l.get("status")})
+    if nr and not a.no_live and not site.get("home_blocked"):
+        log(f"re-checking {len(nr)} URLs Screaming Frog got no response from ...")
+        st = LC.link_status(nr, F)
+        ok = {u for u, s in st.items() if s["status"] == 200 or (s["final"] and s["final"][1] == 200)}
+        for l in links["internal"]:
+            s_ = st.get(l["target"])
+            if s_ and not l.get("status"):
+                l["status"] = s_["status"]; l["final"] = (s_["final"] or [None])[0]
+        links["internal"] = [l for l in links["internal"] if l["target"] not in ok or 300 <= (l.get("status") or 0) < 400]
+        recheck_note = f"Screaming Frog got no response from {len(nr)} URLs; live re-check: {len(ok)} of them respond normally (server throttled the crawl, not broken). Re-crawl with a lower speed (1-2 URL/s)."
+        if "internal_noresponse" in ISS:
+            still = [u for u in nr if u not in ok]
+            if not still:
+                del ISS["internal_noresponse"]
+            else:
+                bad_src = {canon(l["source"]) for l in links["internal"] if l["target"] in still}
+                ISS["internal_noresponse"]["urls"] = {u: s for u, s in ISS["internal_noresponse"]["urls"].items() if u in bad_src}
+                ISS["internal_noresponse"]["targets"] = set(still)
+                ISS["internal_noresponse"]["counts"]["SF"] = sum(1 for l in links["internal"] if l["target"] in still)
 else:
     targets_int = collections.defaultdict(list); targets_ext = collections.defaultdict(list)
     for p in pages:
@@ -337,7 +391,9 @@ def tech(area, finding, status, source, evidence="", fix_key=None):
     T.append({"area": area, "finding": finding, "status": status, "source": source, "evidence": evidence, "fix_key": fix_key})
 if sf is not None:
     ov = sf.crawl_overview()
-    tech("Crawl", f"{ov.get('Total URLs Encountered', '?')} URLs encountered · {ov.get('Total Internal URLs', '?')} internal · {len(pages)} HTML 200 pages", "Info", "SF")
+    tech("Crawl", f"{ov.get('Total URLs Encountered', '?')} URLs encountered · {ov.get('Total Internal URLs', '?')} internal · {len(pages) - len(gap_pages)} HTML 200 pages"
+         + (f" · +{len(gap_pages)} sitemap pages fetched live (missing from the SF crawl)" if gap_pages else ""), "Info", "SF")
+    if recheck_note: tech("Crawl completeness", recheck_note, "Issue", "SF + Live check")
     sc = sf.security_counts()
     if any(sc.values()):
         tech("Security headers", "Missing: " + ", ".join(f"{k} ({v})" for k, v in sc.items() if v), "Issue", "SF", fix_key="headers")

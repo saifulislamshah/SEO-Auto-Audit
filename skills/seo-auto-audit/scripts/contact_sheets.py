@@ -44,8 +44,11 @@ except TypeError:
     font = ImageFont.load_default()
 per = COLS * ROWS
 failed = []
+import hashlib
+# cache by URL, not by number: numbers change when img_index.json is rebuilt
+cache = lambda it: os.path.join(IM, hashlib.md5(it["url"].encode()).hexdigest()[:16] + ".img")
 for i in idx:
-    fn = os.path.join(IM, f"{i['n']}.img")
+    fn = cache(i)
     if not fetch(i["url"], fn): failed.append(i["n"])
     time.sleep(0.2)
 for start in range(0, len(idx), per):
@@ -53,7 +56,7 @@ for start in range(0, len(idx), per):
     sheet = Image.new("RGB", (TW * COLS, TH * ROWS), "white"); dr = ImageDraw.Draw(sheet)
     for k, it in enumerate(chunk):
         x, y = (k % COLS) * TW, (k // COLS) * TH
-        im = load(os.path.join(IM, f"{it['n']}.img"), it.get("svg"))
+        im = load(cache(it), it.get("svg"))
         if im is not None:
             im.thumbnail((TW - 6, TH - 6)); sheet.paste(im, (x + 3, y + 3))
         else:

@@ -12,7 +12,10 @@ class Semrush:
         for df in (self.mega, self.pages, self.sd):
             if df is not None:
                 df.columns = [unesc(c) for c in df.columns]
-                df["url"] = df["Domain"].astype(str) + df["Page URL"].fillna("").astype(str)
+                if "Domain" in df.columns:
+                    df["url"] = df["Domain"].astype(str) + df["Page URL"].fillna("").astype(str)
+                else:  # newer exports: "Page URL" already holds the full URL
+                    df["url"] = df["Page URL"].fillna("").astype(str)
         if self.issues is not None:
             self.issues["Issue"] = self.issues["Issue"].map(unesc)
 
